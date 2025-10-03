@@ -1,1 +1,263 @@
 
+# frontend-setup.txt
+
+// package.json
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "antd": "^5.8.6",
+    "axios": "^1.4.0",
+    "dayjs": "^1.11.9",
+    "qs": "^6.11.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  }
+}
+
+// src/index.js
+import 'antd/dist/reset.css';
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+
+// src/api.js
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:4000',
+  headers: { 'Content-Type': 'application/json' }
+});
+
+export default api;
+
+// src/components/DoctorForm.jsx
+import React, { useEffect } from 'react';
+import { Form, Input, Select, Switch } from 'antd';
+
+const specialties = [
+  'Cardiology','Dermatology','Neurology','Orthopedics','Pediatrics','Oncology','General Medicine'
+];
+
+export default function DoctorForm({ form, initialValues }) {
+  useEffect(() => {
+    form.resetFields();
+    if (initialValues) {
+      form.setFieldsValue({ ...initialValues, is_active: !!initialValues.is_active });
+    } else {
+      form.setFieldsValue({ is_active: true });
+    }
+  }, [initialValues, form]);
+
+  return (
+    <Form layout="vertical" form={form}>
+      <Form.Item name="name" label="Name" rules={[{ required: true, min: 2 }]}>
+        <Input placeholder="Enter name" />
+      </Form.Item>
+      <Form.Item name="specialty" label="Specialty" rules={[{ required: true }]}>
+        <Select placeholder="Select specialty" options={specialties.map(s => ({ value: s, label: s }))} />
+      </Form.Item>
+      <Form.Item name="email" label="Email" rules={[{ type: 'email', required: true }]}>
+        <Input placeholder="doctor@example.com" />
+      </Form.Item>
+      <Form.Item name="phone" label="Phone" rules={[{ required: true, min: 5 }]}>
+        <Input placeholder="+1-555-0000" />
+      </Form.Item>
+      <Form.Item name="is_active" label="Active" valuePropName="checked">
+        <Switch />
+      </Form.Item>
+    </Form>
+  );
+}
+
+// src/App.jsx
+import React, { useEffect, useMemo, useState } from 'react';
+import { Layout, Table, Typography, Space, Button, Modal, Form, Input, message, Select, Popconfirm, Tag, Switch } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
+import qs from 'qs';
+import api from './api';
+import DoctorForm from './components/DoctorForm';
+
+const { Header, Content } = Layout;
+const { Title } = Typography;
+
+export default function App() {
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 10, total: 0 });
+  const [q, setQ] = useState('');
+  const [specialty, setSpecialty] = useState(undefined);
+  const [sorter, setSorter] = useState({ field: 'created_at', order: 'descend' });
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form] = Form.useForm();
+
+  const specialties = useMemo(() => [
+    'Cardiology','Dermatology','Neurology','Orthopedics','Pediatrics','Oncology','General Medicine'
+  ], []);
+
+  const fetchData = async (p = pagination, s = sorter) => {
+    try {
+      setLoading(true);
+      const params = {
+        page: p.page,
+        pageSize: p.pageSize,
+        q: q || undefined,
+        specialty: specialty || undefined,
+        sortBy: s.field === 'created_at' ? 'created_at' : ['name','specialty','updated_at'].includes(s.field) ? s.field : 'created_at',
+        sortDir: s.order === 'ascend' ? 'asc' : 'desc'
+      };
+      const query = qs.stringify(params, { skipNulls: true });
+      const res = await api.get(`/api/doctors?${query}`);
+      setData(res.data.data);
+      setPagination({ page: res.data.pagination.page, pageSize: res.data.pagination.pageSize, total: res.data.pagination.total });
+    } catch (e) {
+      message.error(e?.response?.data?.error || 'Failed to load doctors');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, specialty]);
+
+  const onTableChange = (pager, filters, s) => {
+    const next = { page: pager.current, pageSize: pager.pageSize, total: pagination.total };
+    setPagination(next);
+    const nextSorter = s && s.field ? s : sorter;
+    setSorter(nextSorter);
+    fetchData(next, nextSorter);
+  };
+
+  const openCreate = () => {
+    setEditing(null);
+    setModalOpen(true);
+  };
+
+  const openEdit = (record) => {
+    setEditing(record);
+    setModalOpen(true);
+  };
+
+  const submit = async () => {
+    try {
+      const values = await form.validateFields();
+      if (editing) {
+        await api.put(`/api/doctors/${editing.id}`, values);
+        message.success('Doctor updated');
+      } else {
+        await api.post('/api/doctors', values);
+        message.success('Doctor created');
+      }
+      setModalOpen(false);
+      fetchData();
+    } catch (e) {
+      if (e?.errorFields) return;
+      message.error(e?.response?.data?.error || 'Operation failed');
+    }
+  };
+
+  const remove = async (id) => {
+    try {
+      await api.delete(`/api/doctors/${id}`);
+      message.success('Doctor deleted');
+      fetchData();
+    } catch (e) {
+      message.error(e?.response?.data?.error || 'Delete failed');
+    }
+  };
+
+  const toggleActive = async (record, checked) => {
+    try {
+      await api.put(`/api/doctors/${record.id}`, { is_active: checked });
+      message.success('Status updated');
+      fetchData();
+    } catch (e) {
+      message.error(e?.response?.data?.error || 'Update failed');
+    }
+  };
+
+  const columns = [
+    { title: 'Name', dataIndex: 'name', sorter: true },
+    { title: 'Specialty', dataIndex: 'specialty', sorter: true },
+    { title: 'Email', dataIndex: 'email' },
+    { title: 'Phone', dataIndex: 'phone' },
+    {
+      title: 'Active',
+      dataIndex: 'is_active',
+      render: (_, record) => (
+        <Space>
+          <Tag color={record.is_active ? 'green' : 'volcano'}>{record.is_active ? 'Active' : 'Inactive'}</Tag>
+          <Switch checked={!!record.is_active} onChange={(v) => toggleActive(record, v)} />
+        </Space>
+      )
+    },
+    {
+      title: 'Actions',
+      render: (_, record) => (
+        <Space>
+          <Button icon={<EditOutlined />} onClick={() => openEdit(record)}>Edit</Button>
+          <Popconfirm title="Delete doctor?" onConfirm={() => remove(record.id)}>
+            <Button danger icon={<DeleteOutlined />}>Delete</Button>
+          </Popconfirm>
+        </Space>
+      )
+    }
+  ];
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      <Header style={{ background: '#fff', padding: '0 24px', borderBottom: '1px solid #eee' }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Title level={4} style={{ margin: 0 }}>Tectra Doctors</Title>
+          <Space>
+            <Input.Search allowClear placeholder="Search name or email" onSearch={setQ} style={{ width: 280 }} />
+            <Select
+              allowClear
+              placeholder="Filter by specialty"
+              style={{ width: 200 }}
+              options={specialties.map(s => ({ value: s, label: s }))}
+              onChange={setSpecialty}
+            />
+            <Button icon={<ReloadOutlined />} onClick={() => { setQ(''); setSpecialty(undefined); fetchData(); }}>Refresh</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Add Doctor</Button>
+          </Space>
+        </Space>
+      </Header>
+      <Content style={{ padding: 24 }}>
+        <Table
+          rowKey="id"
+          loading={loading}
+          dataSource={data}
+          columns={columns}
+          onChange={onTableChange}
+          pagination={{ current: pagination.page, pageSize: pagination.pageSize, total: pagination.total, showSizeChanger: true }}
+        />
+      </Content>
+
+      <Modal
+        title={editing ? 'Edit Doctor' : 'Add Doctor'}
+        open={modalOpen}
+        onOk={submit}
+        onCancel={() => setModalOpen(false)}
+        destroyOnClose
+      >
+        <DoctorForm form={form} initialValues={editing} />
+      </Modal>
+    </Layout>
+  );
+}
